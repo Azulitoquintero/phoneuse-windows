@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""phoneuse launcher: runs the CLI from this checkout (no install step needed)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from phoneuse.cli import main  # noqa: E402
+
+main()

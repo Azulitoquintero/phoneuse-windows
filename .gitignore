@@ -1,0 +1,20 @@
+# Compilados y entornos
+**/bin/Debug/
+**/bin/Release/
+**/obj/
+phonehid/salida/
+typeover/
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+
+# Programas de terceros: se descargan aparte (ver README)
+uxplay/
+
+# Datos locales: registros, capturas del móvil
+*.log
+*.err
+*.png
+!phoneuse-win/docs/**/*.png
+COMO-USAR.md

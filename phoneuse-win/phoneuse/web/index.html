@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>phoneuse</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  html { background: #0e0e11; }  /* on html only: the agent glow sits behind the phone, above this */
+  body { display: grid; place-items: center; font: 15px system-ui, sans-serif; color: rgba(255, 255, 255, .55); }
+  #phone { position: relative; background: #18181c; touch-action: none; user-select: none; }
+  #screen { position: absolute; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #note { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; line-height: 1.5; padding: 0 8%; }
+  #note b { font-weight: 600; }
+  #note[hidden] { display: none; }
+  .glass { background: rgba(28, 28, 32, .72); -webkit-backdrop-filter: blur(28px) saturate(170%);
+           backdrop-filter: blur(28px) saturate(170%); border: 1px solid rgba(255, 255, 255, .09);
+           box-shadow: 0 18px 50px rgba(0, 0, 0, .45); color: #f5f5f7; }
+  button { font: inherit; border: 0; background: none; color: inherit; cursor: pointer; }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid rgba(10, 132, 255, .7); outline-offset: 2px; }
+  #gear { position: fixed; z-index: 10; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 50%;
+          display: grid; place-items: center; color: rgba(255, 255, 255, .62); }
+  #gear:hover, #gear[aria-expanded="true"] { color: #fff; }
+  #kbd { position: fixed; z-index: 10; top: 14px; left: 14px; height: 34px; padding: 0 8px 0 12px; border-radius: 99px;
+         display: flex; align-items: center; gap: 9px; font-size: 14px; color: rgba(255, 255, 255, .85); }
+  #awake .sw, #kbd .sw, #bUse .sw, #askSession .sw { width: 34px; height: 20px; border-radius: 99px; background: rgba(120, 120, 128, .4); position: relative;
+             transition: background .2s; }
+  #awake .sw::after, #kbd .sw::after, #bUse .sw::after, #askSession .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+                    background: #fff; transition: transform .2s; }
+  #awake .sw, #bUse .sw, #askSession .sw { flex: none; }
+  #awake[aria-checked="true"] .sw, #kbd[aria-checked="true"] .sw, #bUse[aria-checked="true"] .sw, #askSession[aria-checked="true"] .sw { background: #30d158; }
+  #awake[aria-checked="true"] .sw::after, #kbd[aria-checked="true"] .sw::after, #bUse[aria-checked="true"] .sw::after, #askSession[aria-checked="true"] .sw::after { transform: translateX(14px); }
+  /* who controls the phone: the agent (glow + pill with Take over) or the owner */
+  #takeover { position: fixed; z-index: 10; top: 14px; right: 58px; height: 34px; padding: 0 5px 0 14px; border-radius: 99px;
+              font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 230px);
+              transition: background .3s, border-color .3s; }
+  #takeover[hidden] { display: none; }
+  #takeover.idle { padding-right: 14px; cursor: default; }
+  #takeoverLabel { white-space: nowrap; flex: none; }
+  @media (max-width: 560px) {  /* below the keyboard switch, right-aligned */
+    #takeover { top: 56px; right: 14px; max-width: calc(100vw - 28px); }
+    #takeover .what { display: none; }
+  }
+  #takeover .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #30d158; box-shadow: 0 0 8px #30d158; }
+  #takeover.driving .dot { background: #64d2ff; box-shadow: 0 0 10px #0a84ff; animation: dotpulse 1.2s ease-in-out infinite; }
+  #takeover.paused .dot { background: #ff9f0a; box-shadow: 0 0 8px #ff9f0a; }
+  @keyframes dotpulse { 50% { transform: scale(.65); opacity: .7; } }
+  #takeover .what { color: rgba(235, 235, 245, .55); font-weight: 400; white-space: nowrap; overflow: hidden;
+                    text-overflow: ellipsis; min-width: 0; }
+  #takeover .what:empty { display: none; }
+  #takeover .act { flex: none; height: 26px; padding: 0 11px; border-radius: 99px; display: grid; place-items: center;
+                   background: rgba(255, 255, 255, .12); font-size: 13px; }
+  #takeover:hover .act { background: rgba(255, 255, 255, .2); }
+  #takeover.idle .act { display: none; }
+  #takeover.driving { border-color: rgba(100, 210, 255, .35); }
+  #takeover.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 rgba(48, 209, 88, .7), 0 18px 50px rgba(0, 0, 0, .45); }
+                     100% { box-shadow: 0 0 0 14px rgba(48, 209, 88, 0), 0 18px 50px rgba(0, 0, 0, .45); } }
+  /* while an agent drives: a moving glow around the phone, behind its body */
+  @property --glow { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+  #phone::before, #phone::after { content: ""; position: absolute; z-index: -1; border-radius: inherit; pointer-events: none;
+    background: conic-gradient(from var(--glow), #0a84ff, #5e5ce6, #bf5af2, #ff375f, #64d2ff, #0a84ff);
+    opacity: 0; transition: opacity .6s; animation: glow 3.5s linear infinite; }
+  #phone::before { inset: -10px; filter: blur(22px); }
+  #phone::after { inset: -2.5px; filter: blur(1.5px); }
+  #phone.driving::before { opacity: .85; }
+  #phone.driving::after { opacity: 1; }
+  @keyframes glow { to { --glow: 360deg; } }
+  /* the owner gets the phone back: a short green ring */
+  #phone.handback::after { background: #30d158; opacity: 0; animation: handback 1.4s ease-out; }
+  @keyframes handback { 0% { opacity: 1; } 100% { opacity: 0; } }
+  #phone.driving #screen { box-shadow: 0 0 0 1px rgba(100, 210, 255, .35); }
+  #agentDot { position: absolute; z-index: 2; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+              background: #5ac8fa; box-shadow: 0 0 0 2px rgba(255, 255, 255, .85), 0 0 14px 4px rgba(10, 132, 255, .8);
+              pointer-events: none; transition: left .12s ease-out, top .12s ease-out, transform .1s, opacity .3s; }
+  #agentDot.down { transform: scale(.7); box-shadow: 0 0 0 2px #fff, 0 0 20px 8px rgba(10, 132, 255, .95); }
+  #agentDot[hidden] { display: block; opacity: 0; }
+  #btDown { position: fixed; z-index: 10; top: 56px; left: 14px; height: 34px; padding: 0 14px; border-radius: 99px;
+            font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  #btDown[hidden] { display: none; }
+  #btDown .dot { width: 7px; height: 7px; border-radius: 50%; background: #ff9f0a; }
+  #settings { position: fixed; z-index: 20; top: 56px; right: 14px; width: 300px; border-radius: 18px; padding: 14px; }
+  #settings[hidden], #ask[hidden] { display: none; }
+  .label { font-size: 12px; letter-spacing: .02em; color: rgba(235, 235, 245, .6); margin: 0 6px 7px; }
+  .group { background: rgba(255, 255, 255, .06); border-radius: 12px; overflow: hidden; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 11px 12px; font-size: 15px; }
+  .item + .item { border-top: 1px solid rgba(255, 255, 255, .07); }
+  .item .grow { flex: 1; }
+  .item input { flex: 1; min-width: 0; font: inherit; font-size: 15px; color: #fff; background: none; border: 0; padding: 0;
+                letter-spacing: .12em; }
+  .item input::placeholder { letter-spacing: 0; color: rgba(235, 235, 245, .35); }
+  .item input, .item input:focus, .item input:focus-visible { outline: none; box-shadow: none; }
+  .link { color: #0a84ff; font-weight: 500; }
+  .link:disabled { color: rgba(235, 235, 245, .3); cursor: default; }
+  .danger { color: #ff453a; }
+  .destructive { display: block; width: 100%; margin-top: 10px; padding: 10px; border-radius: 12px; font-size: 15px;
+                 font-weight: 500; color: #ff453a; background: rgba(255, 69, 58, .14); }
+  .destructive:hover { background: rgba(255, 69, 58, .2); }
+  .foot { font-size: 12px; line-height: 1.45; color: rgba(235, 235, 245, .5); margin: 8px 6px 0; }
+  #bridge .item { width: 100%; text-align: left; box-sizing: border-box; }
+  #bridge button.item:hover { background: rgba(255, 255, 255, .05); }
+  #bridge .sub { display: block; font-size: 12px; color: rgba(235, 235, 245, .55); margin-top: 2px; }
+  #bridge .code { font-size: 30px; font-weight: 600; letter-spacing: .08em; text-align: center; padding: 14px 0 6px;
+                  font-variant-numeric: tabular-nums; }
+  #bridge .dim { color: rgba(235, 235, 245, .55); }
+  #bridge .ok { color: #30d158; }
+  #bridge .item input { letter-spacing: 0; }
+  #settings { max-height: calc(100vh - 80px); overflow-y: auto; scrollbar-width: none; }
+  #settings::-webkit-scrollbar { display: none; }
+  /* an agent asks the owner (to start a session, or to unlock): an amber toast that needs an answer */
+  #ask { position: fixed; z-index: 30; top: 64px; left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 32px));
+         box-sizing: border-box; border-radius: 20px; padding: 14px 14px 16px; display: grid; overflow: hidden;
+         grid-template-columns: 40px 1fr; gap: 4px 12px; align-items: center; color: #1c1300;
+         background: linear-gradient(135deg, #ffd60a, #ff9f0a); box-shadow: 0 0 0 1px rgba(255, 214, 10, .6),
+         0 18px 50px rgba(0, 0, 0, .55), 0 0 40px rgba(255, 159, 10, .45);
+         animation: askin .35s cubic-bezier(.2, .9, .3, 1.2), askglow 2s ease-in-out .35s infinite; }
+  @keyframes askin { from { opacity: 0; transform: translate(-50%, -16px) scale(.96); } }
+  @keyframes askglow { 50% { box-shadow: 0 0 0 1px rgba(255, 214, 10, .6), 0 18px 50px rgba(0, 0, 0, .55),
+                                         0 0 64px rgba(255, 159, 10, .75); } }
+  #ask .ico { grid-row: span 2; width: 40px; height: 40px; border-radius: 12px; background: rgba(28, 19, 0, .14);
+              display: grid; place-items: center; }
+  #askTitle { font-size: 16px; font-weight: 700; line-height: 1.2; }
+  #askText { font-size: 14px; line-height: 1.3; opacity: .78; white-space: normal; }
+  #ask .btns { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 10px; }
+  #ask .btn { flex: 1; height: 38px; border-radius: 12px; font-weight: 600; font-size: 15px;
+              background: rgba(28, 19, 0, .14); color: #1c1300; }
+  #ask .btn:hover { background: rgba(28, 19, 0, .22); }
+  #ask .btn.primary { background: #1c1300; color: #ffd60a; }
+  #ask .btn.primary:hover { background: #000; }
+  #ask .timer { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(28, 19, 0, .12); }
+  #ask .timer i { display: block; height: 100%; background: rgba(28, 19, 0, .55); transform-origin: left;
+                  animation: asktime 120s linear forwards; }
+  @keyframes asktime { to { transform: scaleX(0); } }
+</style>
+</head>
+<body>
+<button id="kbd" class="glass" role="switch" aria-checked="false" title="Show or hide the iPhone's on-screen keyboard">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.75"><rect x="2" y="6" width="20" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
+  <span>On-screen keyboard</span><span class="sw"></span>
+</button>
+<div id="btDown" class="glass" hidden><span class="dot"></span>Bluetooth not connected</div>
+<button id="takeover" class="glass idle" hidden aria-live="polite"><span class="dot"></span><span id="takeoverLabel">You're in control</span><span class="what" id="agentWhat"></span><span class="act" id="takeoverAct"></span></button>
+<button id="gear" class="glass" title="Settings" aria-label="Settings" aria-expanded="false">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+</button>
+<div id="settings" class="glass" hidden role="dialog" aria-label="Settings">
+  <div class="group" style="margin-bottom: 14px">
+    <button class="item" id="awake" role="switch" aria-checked="false" style="width: 100%; text-align: left">
+      <span class="grow">Keep screen awake</span><span class="sw"></span>
+    </button>
+    <button class="item" id="askSession" role="switch" aria-checked="false" style="width: 100%; text-align: left">
+      <span class="grow">Ask before agent starts</span><span class="sw"></span>
+    </button>
+  </div>
+  <div class="label">Bluetooth bridge</div>
+  <div class="group" id="bridge"></div>
+  <p class="foot" id="bridgeFoot" hidden></p>
+  <button class="destructive" id="bForget" hidden>Forget Bridge</button>
+  <div style="height: 14px"></div>
+  <div class="label">Passcode</div>
+  <div class="group">
+    <form class="item" id="pcForm" autocomplete="off">
+      <input type="password" id="pcInput" placeholder="Enter passcode" inputmode="numeric" autocomplete="off" aria-label="iPhone passcode">
+      <button class="link" type="submit" id="pcSave" disabled>Save</button>
+    </form>
+  </div>
+  <button class="destructive" id="pcRemove" hidden>Remove Passcode</button>
+  <p class="foot danger" id="pcError" hidden></p>
+</div>
+<div id="ask" hidden role="alertdialog" aria-labelledby="askTitle" aria-describedby="askText">
+  <div class="ico" id="askIcon"></div>
+  <div id="askTitle">An agent wants control of your iPhone</div>
+  <div id="askText"></div>
+  <div class="btns"><button class="btn" id="deny">Deny</button><button class="btn primary" id="approve">Allow</button></div>
+  <div class="timer"><i id="askTimer"></i></div>
+</div>
+<div id="phone">
+  <div id="screen">
+    <canvas id="video"></canvas>
+    <div id="agentDot" hidden></div>
+    <div id="note"></div>
+  </div>
+</div>
+<script>
+"use strict";
+// Video: H.264 access units over the WebSocket, decoded with WebCodecs and drawn
+// as soon as each frame is decoded. Input: pointer and key events back to the
+// server, which drives the phone the same way the mirror window does.
+
+const phone = document.getElementById("phone");
+const scr = document.getElementById("screen");
+const canvas = document.getElementById("video");
+const note = document.getElementById("note");
+const ctx = canvas.getContext("2d", { alpha: false });  // (desynchronized drew over the settings panel)
+
+let ws = null, decoder = null, configured = false, configuring = false, askedKeyframe = 0;
+let state = { live: false, name: "phoneuse", screen: [402, 874], bezel: 30 / 498, radius: 60 / 498 };
+let playing = false;  // a frame from the current stream is on screen
+
+function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+// While an agent drives the phone, this page sends no input: mixing in clicks
+// and keys would confuse it. "Take over" stops the agent; "Resume agent" lets it go on.
+function active() { return state.live && playing && state.agent !== "driving"; }
+
+function showNote(html) { note.innerHTML = html && `<div>${html}</div>`; note.hidden = !html; }
+// Never leave an old picture up: whenever the phone isn't live (locked, screen off,
+// mirroring stopped, server gone), the screen goes black until a new frame arrives.
+// The phone sends frames only when its screen changes, and none at all while the
+// screen is off (locking doesn't always end mirroring). Its status-bar clock changes
+// every minute, so a minute boundary passing with no new frame means the screen is
+// off: the old picture goes away then.
+let lastFrameAt = 0, screenOff = false;
+setInterval(() => {
+  if (!state.live || !hasPicture || screenOff) return;
+  if (Date.now() > Math.floor(lastFrameAt / 60000 + 1) * 60000 + 4000) { screenOff = true; blank(); updateNote(); }
+}, 1000);
+function blank() { hasPicture = false; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+// Notes only appear when there is no picture: a picture on screen stays put
+// while the connection or stream recovers, and short gaps show nothing at all.
+let hasPicture = false;   // a frame of the phone is on the canvas
+let troubleSince = 0;     // when the current no-picture problem started
+function updateNote() {
+  if (!("VideoDecoder" in window)) return showNote("This browser can't decode video here (no WebCodecs).<br>Use a current Chrome, Edge or Firefox.");
+  const connected = ws && ws.readyState === 1;
+  if (connected && !state.live && !state.mirroring) {  // mirroring ended (iOS ends it when the phone locks)
+    blank();
+    return showNote(`Screen Mirroring stopped, or the iPhone is locked.<br>Unlock it, then open Control Center<br>`
+                    + `<b>Screen Mirroring</b> › <b>${state.name}</b>`);
+  }
+  if (connected && state.live && screenOff) {
+    return showNote("The iPhone's screen is off or locked.<br>Wake it to see it here.");
+  }
+  if (hasPicture || (connected && state.live)) { troubleSince = 0; return showNote(""); }
+  if (!troubleSince) { troubleSince = performance.now(); setTimeout(updateNote, 5100); }
+  if (performance.now() - troubleSince < 5000) return showNote("");
+  if (!connected) return showNote("Waiting for <b>phoneuse up</b>");
+  showNote(`The iPhone is mirroring, but no picture has arrived.<br>Stop and start <b>Screen Mirroring</b> once.`);
+}
+
+// ---- layout: the phone body fits the window; the screen keeps the phone's shape ----
+function layout() {
+  const aspect = state.screen[0] / state.screen[1];
+  const dw = 1 + 2 * state.bezel, dh = 1 / aspect + 2 * state.bezel;
+  const u = Math.min((innerWidth - 24) / dw, (innerHeight - 24) / dh);  // px per screen width
+  Object.assign(phone.style, { width: `${dw * u}px`, height: `${dh * u}px`, borderRadius: `${(state.radius + state.bezel) * u}px` });
+  Object.assign(scr.style, { left: `${state.bezel * u}px`, top: `${state.bezel * u}px`, width: `${u}px`,
+                             height: `${u / aspect}px`, borderRadius: `${state.radius * u}px` });
+}
+addEventListener("resize", layout);
+
+// ---- video ----
+function codecString(data) {
+  // avc1.PPCCLL from the SPS (profile, constraint flags, level), found after a start code
+  for (let i = 0; i + 7 < data.length; i++) {
+    if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1 && (data[i + 3] & 0x1f) === 7) {
+      const h = (b) => b.toString(16).padStart(2, "0");
+      return `avc1.${h(data[i + 4])}${h(data[i + 5])}${h(data[i + 6])}`;
+    }
+  }
+  return null;
+}
+
+function newDecoder() {
+  if (decoder && decoder.state !== "closed") decoder.close();
+  configured = false;
+  decoder = new VideoDecoder({
+    output(frame) {
+      if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+        canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;
+      }
+      ctx.drawImage(frame, 0, 0);
+      frame.close();
+      lastFrameAt = Date.now();
+      if (screenOff) { screenOff = false; hasPicture = true; updateNote(); }
+      if (!playing) { playing = true; hasPicture = true; send({ t: "playing" }); updateNote(); }
+    },
+    error(e) {
+      console.warn("decoder:", e);
+      playing = false; updateNote();
+      newDecoder();
+      awaitingKey = true;  // start over from a fresh keyframe
+      askKeyframe();
+    },
+  });
+}
+
+async function configure(data) {
+  // GPU decoding when the browser offers it (Chromium on Linux often doesn't), else software.
+  const codec = codecString(data);
+  if (!codec) return;
+  configuring = true;
+  for (const hardwareAcceleration of ["prefer-hardware", "no-preference"]) {
+    const config = { codec, optimizeForLatency: true, hardwareAcceleration };
+    if ((await VideoDecoder.isConfigSupported(config)).supported) {
+      decoder.configure(config);
+      configured = true;
+      break;
+    }
+  }
+  configuring = false;
+  if (!configured) showNote(`This browser can't decode the phone's video (${codec}).`);
+}
+
+// Every frame after a keyframe needs all the frames before it: dropping one
+// corrupts the picture until the next keyframe (green smears). So frames that
+// arrive while the decoder is being set up wait their turn, and a decoder that
+// falls behind skips to a fresh keyframe it asks the server for.
+let pending = [];        // frames waiting for the decoder to be configured
+let awaitingKey = true;  // skip frames until a keyframe
+
+function askKeyframe() {
+  if (performance.now() - askedKeyframe > 1000) {
+    askedKeyframe = performance.now();
+    send({ t: "keyframe" });
+  }
+}
+
+function decode(key, data) {
+  decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: performance.now() * 1000, data }));
+}
+
+function onFrame(buf) {
+  const bytes = new Uint8Array(buf);
+  const key = bytes[0] === 1, data = bytes.subarray(1);
+  if (!decoder || decoder.state === "closed") newDecoder();
+  if (awaitingKey && !key) return;
+  awaitingKey = false;
+  if (!configured) {
+    pending.push([key, data]);
+    if (!configuring) {
+      configure(pending[0][1]).then(() => {
+        const frames = pending;
+        pending = [];
+        if (configured) for (const [k, d] of frames) decode(k, d);
+        else awaitingKey = true;
+      });
+    }
+    return;
+  }
+  if (decoder.decodeQueueSize > 8 && !key) {  // behind: drop the backlog, restart from a keyframe
+    awaitingKey = true;
+    askKeyframe();
+    return;
+  }
+  decode(key, data);
+}
+
+// ---- connection ----
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = updateNote;
+  ws.onmessage = (e) => {
+    if (typeof e.data !== "string") return onFrame(e.data);
+    const msg = JSON.parse(e.data);
+    if (msg.type === "agent-cursor") return showAgentDot(msg);
+    if (msg.type === "agent-action") return showAgentAction(msg);
+    if (msg.type === "unlock-request") return showAsk(msg.id, "unlock");
+    if (msg.type === "unlock-done") return showAsk(null, "unlock");
+    if (msg.type === "session-request") return showAsk(msg.id, "session", msg.action);
+    if (msg.type === "session-done") return showAsk(null, "session");
+    if (msg.type !== "state") return;
+    const wasLive = state.live;
+    state = msg;
+    if (!state.live) { if (wasLive) playing = false; blank(); }
+    layout(); updateNote(); showAgent();
+    awakeSw.setAttribute("aria-checked", !!state.awake);
+    document.getElementById("btDown").hidden = state.bluetooth !== false;
+  };
+  ws.onclose = () => {
+    playing = false; configured = false; awaitingKey = true; pending = []; blank(); updateNote();
+    setTimeout(connect, 1000);
+  };
+}
+
+// ---- mouse: positions as fractions of the screen; outside 0..1 is the bezel ----
+function at(e) {
+  const r = scr.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+}
+phone.addEventListener("pointermove", (e) => { if (active()) send({ t: "move", ...at(e) }); });
+phone.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !active()) return;
+  phone.setPointerCapture(e.pointerId);
+  send({ t: "down", ...at(e) });
+});
+const lift = () => send({ t: "up" });
+phone.addEventListener("pointerup", (e) => { if (e.button === 0) lift(); });
+phone.addEventListener("pointercancel", lift);
+phone.addEventListener("contextmenu", (e) => e.preventDefault());
+// Wheel and trackpad scrolling: the server turns it into a drag (iOS ignores the
+// wheel). Scrolling down moves the content up, so the drag goes the other way.
+phone.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (!active()) return;
+  const r = scr.getBoundingClientRect();
+  const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? r.height : 1;  // lines, pages -> px
+  send({ t: "scroll", ...at(e), dx: -e.deltaX * unit / r.width, dy: -e.deltaY * unit / r.height });
+}, { passive: false });
+
+// ---- keyboard: KeyboardEvent.code -> USB HID usage; Meta (Super) is Cmd on the phone ----
+const MODS = { ControlLeft: 0x01, ShiftLeft: 0x02, AltLeft: 0x04, MetaLeft: 0x08,
+               ControlRight: 0x10, ShiftRight: 0x20, AltRight: 0x40, MetaRight: 0x80 };
+const USAGE = { Enter: 40, Escape: 41, Backspace: 42, Tab: 43, Space: 44, Minus: 45, Equal: 46,
+                BracketLeft: 47, BracketRight: 48, Backslash: 49, Semicolon: 51, Quote: 52, Backquote: 53,
+                Comma: 54, Period: 55, Slash: 56, CapsLock: 57, Insert: 73, Home: 74, PageUp: 75,
+                Delete: 76, End: 77, PageDown: 78, ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82 };
+for (let i = 0; i < 26; i++) USAGE["Key" + String.fromCharCode(65 + i)] = 4 + i;
+for (let i = 1; i <= 9; i++) USAGE["Digit" + i] = 29 + i;
+USAGE.Digit0 = 39;
+for (let i = 1; i <= 12; i++) USAGE["F" + i] = 57 + i;
+const BROWSER_KEYS = new Set(["F5", "F11", "F12"]);  // left to the browser
+// F1-F4 press the phone's own buttons (consumer keys) for as long as they are held.
+const CONSUMER = { F1: "siri", F2: "home", F3: "search", F4: "eject" };
+
+function onKey(e, down) {
+  if (!active() || BROWSER_KEYS.has(e.code)) return;
+  // Keys typed into the page itself (the settings panel's passcode field) never go to the phone.
+  if (!settings.hidden || e.target.closest?.("input, textarea, button, .panel")) return;
+  if (e.code in MODS) { send({ t: "mod", bit: MODS[e.code], down }); e.preventDefault(); return; }
+  if (e.code in CONSUMER) {
+    e.preventDefault();
+    if (!(down && e.repeat)) holdConsumer(CONSUMER[e.code], down);
+    return;
+  }
+  if (!(e.code in USAGE)) return;
+  e.preventDefault();
+  if (down && e.repeat) return;  // the phone repeats keys itself
+  send({ t: "key", usage: USAGE[e.code], down });
+}
+function holdConsumer(key, down) {
+  send({ t: "consumer", key, down });
+  if (key === "eject" && !down) kbd.setAttribute("aria-checked", kbd.getAttribute("aria-checked") !== "true");
+}
+addEventListener("keydown", (e) => onKey(e, true));
+addEventListener("keyup", (e) => onKey(e, false));
+addEventListener("blur", () => send({ t: "blur" }));  // let go of held keys and buttons
+
+// ---- settings: the saved passcode (never sent back to the page) ----
+const settings = document.getElementById("settings"), gear = document.getElementById("gear");
+const pcInput = document.getElementById("pcInput"), pcSave = document.getElementById("pcSave");
+const pcError = document.getElementById("pcError"), pcRemove = document.getElementById("pcRemove");
+function showSaved(saved) {
+  pcRemove.hidden = !saved;
+  pcInput.placeholder = saved ? "Replace passcode" : "Enter passcode";
+  pcError.hidden = true;
+}
+async function passcode(method, body) {
+  const r = await fetch("/api/passcode", { method, headers: { "Content-Type": "application/json" },
+                                           body: body && JSON.stringify(body) });
+  const j = await r.json();
+  if (j.error) { pcError.textContent = j.error; pcError.hidden = false; } else showSaved(j.saved);
+}
+function openSettings(open) {
+  settings.hidden = !open;
+  gear.setAttribute("aria-expanded", open);
+  pcInput.value = ""; pcSave.disabled = true;
+  if (open) { passcode("GET"); bridgeShow(); pcInput.focus(); }
+}
+gear.onclick = () => openSettings(settings.hidden);
+addEventListener("pointerdown", (e) => { if (!settings.hidden && !settings.contains(e.target) && !gear.contains(e.target)) openSettings(false); });
+addEventListener("keydown", (e) => { if (e.key === "Escape" && !settings.hidden) openSettings(false); });
+pcInput.oninput = () => { pcSave.disabled = !pcInput.value; };
+document.getElementById("pcForm").onsubmit = (e) => {
+  e.preventDefault();
+  if (pcInput.value) passcode("POST", { code: pcInput.value });
+  pcInput.value = ""; pcSave.disabled = true;
+};
+pcRemove.onclick = () => passcode("DELETE");
+
+
+// ---- Bluetooth bridge: an ESP32 the iPhone pairs with, driven over Wi-Fi ----
+// Setup: find it over BLE, compare the code on its screen, pick a network it
+// sees, type the password. The server holds the BLE conversation between steps.
+const bridgeBox = document.getElementById("bridge"), bridgeFoot = document.getElementById("bridgeFoot");
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+async function bapi(path, body) {
+  const r = await fetch("/api/bridge" + path, { method: body === undefined ? "GET" : "POST",
+    headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  return r.json();
+}
+function bview(html, foot) {
+  bridgeBox.innerHTML = html;
+  bForget.hidden = true;
+  bridgeFoot.hidden = !foot; bridgeFoot.innerHTML = foot || "";
+  bridgeFoot.className = "foot" + (foot && foot.startsWith("!") ? " danger" : "");
+  if (foot && foot.startsWith("!")) bridgeFoot.innerHTML = foot.slice(1);
+}
+const on = (sel, fn) => { const el = bridgeBox.querySelector(sel); if (el) el.onclick = fn; };
+const bForget = document.getElementById("bForget");
+bForget.onclick = async () => { await fetch("/api/bridge", { method: "DELETE" }); bridgeShow(); };
+async function bridgeShow() {
+  const j = await bapi("");
+  if (!j.saved) {
+    bview(`<button class="item" id="bSetup"><span class="grow link">Set Up Bridge…</span></button>`,
+          "A LilyGO T-Display the iPhone pairs with as its keyboard and mouse. phoneuse reaches it over Wi-Fi.");
+    on("#bSetup", bridgeFind);
+    return;
+  }
+  const st = j.status || {}, sv = j.saved;
+  const phone = st.error ? `<span class="danger">Not answering</span>`
+    : st.connected ? `<span class="ok">${esc(st.phone || "iPhone")}</span>`
+    : `Pair on the iPhone: Bluetooth › PhoneUse Bridge`;
+  bview(`<div class="item"><span class="grow">Bridge ${esc(sv.id.slice(-4))}<span class="sub">${esc(sv.ssid)} · ${esc(sv.ip)}</span>
+           <span class="sub">${phone}</span></span></div>
+         <button class="item" id="bUse" role="switch" aria-checked="${!!sv.use}"><span class="grow">Send input through bridge</span><span class="sw"></span></button>
+         <button class="item" id="bChange"><span class="grow link">Change Network…</span></button>`,
+        st.error ? "!" + esc(st.error) : "");
+  const use = bridgeBox.querySelector("#bUse");
+  use.onclick = async () => { await bapi("/use", { on: !sv.use }); bridgeShow(); };
+  on("#bChange", bridgeNetworks);  // over the network: no BLE, no code
+  bForget.hidden = false;
+}
+async function bridgeFind() {
+  bview(`<div class="item dim">Looking for bridges…</div>`);
+  const j = await bapi("/find", {});
+  if (j.error) return bview(`<button class="item" id="bAgain"><span class="grow link">Try Again</span></button>`, "!" + esc(j.error)), on("#bAgain", bridgeFind);
+  if (!j.bridges.length) {
+    bview(`<button class="item" id="bAgain"><span class="grow link">Look Again</span></button>
+           <button class="item" id="bBack"><span class="grow link">Cancel</span></button>`,
+          "No bridge is waiting for setup. A new one waits by itself; a set-up one does after you hold its lower button for 3 seconds.");
+    on("#bAgain", bridgeFind); on("#bBack", bridgeShow);
+    return;
+  }
+  bview(j.bridges.map((b, i) => `<button class="item" data-i="${i}"><span class="grow">${esc(b.name)}</span><span class="dim">${b.rssi} dBm</span></button>`).join(""));
+  bridgeBox.querySelectorAll("[data-i]").forEach((el) => el.onclick = () => bridgePair(j.bridges[+el.dataset.i]));
+}
+async function bridgePair(b) {
+  bview(`<div class="item dim">Connecting to ${esc(b.name)}…</div>`);
+  const j = await bapi("/pair", { address: b.address });
+  if (j.error) return bview(`<button class="item" id="bAgain"><span class="grow link">Try Again</span></button>`, "!" + esc(j.error)), on("#bAgain", bridgeFind);
+  bview(`<div class="code">${esc(j.code)}</div>
+         <button class="item" id="bSame"><span class="grow link">The Bridge Shows This Code</span></button>
+         <button class="item" id="bDiff"><span class="grow link">It Shows Another Code</span></button>`,
+        "Compare with the bridge's screen. A different code means something else answered; stop there.");
+  on("#bSame", bridgeNetworks);
+  on("#bDiff", async () => { await bapi("/cancel", {}); bridgeShow(); });
+}
+async function bridgeNetworks() {
+  bview(`<div class="item dim">The bridge is looking for Wi-Fi networks…</div>`);
+  const j = await bapi("/networks", {});
+  if (j.error) return bview(`<button class="item" id="bAgain"><span class="grow link">Start Again</span></button>`, "!" + esc(j.error)), on("#bAgain", bridgeFind);
+  const lock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="opacity:.5"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+  bview(j.networks.map((n, i) => `<button class="item" data-i="${i}"><span class="grow">${esc(n.s)}</span>${n.l ? lock : ""}<span class="dim">${n.r}</span></button>`).join("") +
+        `<button class="item" id="bRescan"><span class="grow link">Scan Again</span></button>`,
+        "Networks the bridge sees. It needs 2.4 GHz Wi-Fi, on the same network as this PC.");
+  bridgeBox.querySelectorAll("[data-i]").forEach((el) => el.onclick = () => bridgePassword(j.networks[+el.dataset.i]));
+  on("#bRescan", bridgeNetworks);
+}
+function bridgePassword(n, error) {
+  bview(`<form class="item" id="bForm" autocomplete="off">
+           <input type="password" id="bPass" placeholder="Password for ${esc(n.s)}" autocomplete="off" aria-label="Wi-Fi password">
+           <button class="link" type="submit" id="bJoin">Join</button></form>
+         <button class="item" id="bOther"><span class="grow link">Other Network</span></button>`, error ? "!" + esc(error) : "");
+  const pass = bridgeBox.querySelector("#bPass");
+  if (!n.l) { pass.value = ""; pass.placeholder = "Open network: no password"; pass.disabled = true; }
+  pass.focus();
+  on("#bOther", bridgeNetworks);
+  bridgeBox.querySelector("#bForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const pw = pass.value;
+    bview(`<div class="item dim">Joining ${esc(n.s)}…</div>`);
+    const j = await bapi("/join", { ssid: n.s, password: pw });
+    if (j.error && j.retry) return bridgePassword(n, j.error);
+    if (j.error) return bview(`<button class="item" id="bAgain"><span class="grow link">Start Again</span></button>`, "!" + esc(j.error)), on("#bAgain", bridgeFind);
+    bridgeShow();
+  };
+}
+
+// ---- requests from agents (an unlock, or a session when "ask before an agent starts"
+// is on): the owner answers here ----
+const ask = document.getElementById("ask");
+let askId = null, askKind = "unlock";
+const ICONS = {
+  session: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>',
+  unlock: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></svg>',
+};
+function showAsk(id, kind, action) {
+  if (!id && kind !== askKind) return;  // the other request ended
+  const fresh = id && id !== askId;
+  askId = id; askKind = kind; ask.hidden = !id;
+  if (!id) return;
+  document.getElementById("askIcon").innerHTML = ICONS[kind];
+  document.getElementById("askTitle").textContent = kind === "session"
+    ? "An agent wants control of your iPhone" : "An agent wants to unlock your iPhone";
+  document.getElementById("askText").textContent = kind === "session"
+    ? (action ? `First step: ${action}. Allow it to use the phone until it's done?` : "Allow it to use the phone until it's done?")
+    : "Allow it to enter your saved passcode once?";
+  document.getElementById("approve").textContent = kind === "session" ? "Allow" : "Unlock";
+  if (fresh) {  // restart the 2-minute countdown and the entrance
+    for (const el of [ask, document.getElementById("askTimer")]) { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+  }
+}
+async function answer(approve) {
+  if (!askId) return;
+  await fetch(`/api/${askKind}/answer`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ id: askId, approve }) });
+  showAsk(null, askKind);
+}
+document.getElementById("approve").onclick = () => answer(true);
+document.getElementById("deny").onclick = () => answer(false);
+
+// The iPhone's own keyboard hides while phoneuse's Bluetooth keyboard is
+// connected; the switch shows or hides it (Eject). iOS doesn't report whether
+// it is showing, so the switch remembers what it last did.
+const kbd = document.getElementById("kbd");
+kbd.onclick = async () => {
+  const r = await fetch("/api/keyboard", { method: "POST" });
+  if (r.ok) kbd.setAttribute("aria-checked", kbd.getAttribute("aria-checked") !== "true");
+};
+
+// Keep screen awake: the server nudges the pointer about once a second while
+// nobody else uses the phone, so Auto-Lock never fires.
+const awakeSw = document.getElementById("awake");
+awakeSw.onclick = () => fetch("/api/awake", { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ on: awakeSw.getAttribute("aria-checked") !== "true" }) });
+
+const askSw = document.getElementById("askSession");
+askSw.onclick = async () => {
+  const r = await fetch("/api/session/ask", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on: askSw.getAttribute("aria-checked") !== "true" }) });
+  if (r.ok) askSw.setAttribute("aria-checked", (await r.json()).on);
+};
+function loadAskSetting() {
+  fetch("/api/session/ask").then((r) => r.json()).then((j) => askSw.setAttribute("aria-checked", j.on)).catch(() => {});
+}
+loadAskSetting();
+document.getElementById("gear").addEventListener("click", loadAskSetting);  // the app may have changed it
+
+// ---- agent sessions ----
+const takeover = document.getElementById("takeover"), takeoverLabel = document.getElementById("takeoverLabel");
+const agentDot = document.getElementById("agentDot");
+function showAgentDot(m) {
+  agentDot.style.left = `${m.x * 100}%`;
+  agentDot.style.top = `${m.y * 100}%`;
+  agentDot.classList.toggle("down", m.down);
+  agentDot.hidden = false;
+}
+let shownAgent = "idle", agentAction = "";
+function showAgent() {
+  const a = state.agent || "idle";
+  if (a !== "driving") agentDot.hidden = true;
+  phone.classList.toggle("driving", a === "driving");
+  if (shownAgent === "driving" && a !== "driving") {  // the agent let go: show the owner has the phone
+    phone.classList.remove("handback"); void phone.offsetWidth; phone.classList.add("handback");
+    takeover.classList.remove("flash"); void takeover.offsetWidth; takeover.classList.add("flash");
+  }
+  shownAgent = a;
+  takeover.hidden = !state.live && a === "idle";
+  takeover.className = `glass ${a}` + (takeover.classList.contains("flash") ? " flash" : "");
+  takeover.disabled = a === "idle";
+  takeoverLabel.textContent = a === "driving" ? "Agent in control" : a === "paused" ? "You took over" : "You're in control";
+  document.getElementById("takeoverAct").textContent = a === "driving" ? "Take over" : a === "paused" ? "Resume agent" : "";
+  document.getElementById("agentWhat").textContent = a === "driving" ? agentAction : "";
+}
+function showAgentAction(m) {
+  agentAction = m.action || "";
+  if (state.agent === "driving") document.getElementById("agentWhat").textContent = agentAction;
+}
+takeover.onclick = () => state.agent !== "idle" && fetch("/api/agent/takeover", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ take: state.agent !== "paused" }) });
+
+layout(); updateNote(); connect();
+</script>
+</body>
+</html>

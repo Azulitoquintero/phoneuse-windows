@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>phoneuse touch lab</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 15px -apple-system, sans-serif;
+               overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; }
+  canvas { position: fixed; inset: 0; }
+  #log { position: fixed; left: 10px; right: 10px; top: 60px; white-space: pre-wrap; font: 12px ui-monospace, monospace; pointer-events: none; }
+  #clear { position: fixed; right: 12px; bottom: 90px; padding: 8px 14px; border-radius: 10px; background: #333; color: #eee; font: 14px -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="log">touch lab: touch anywhere</div>
+<div id="clear">clear</div>
+<script>
+// Shows exactly which touch events iOS delivers, so HID input can be compared with
+// real fingers. Every gesture is drawn (a line through its touchmove points, a dot
+// per event, a square where it started) and summarized in one log line:
+//   #n kind duration, moves, path, net (dx,dy), back: moves against the drag's direction
+const c = document.getElementById('c'), g = c.getContext('2d'), log = document.getElementById('log');
+let strokes = [], cur = null, n = 0, lines = [];
+function size() {
+  c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio;
+  g.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  redraw();
+}
+function drawStroke(s) {
+  if (!s.pts.length) return;
+  g.strokeStyle = g.fillStyle = s.color; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(s.pts[0][0], s.pts[0][1]);
+  for (const [x, y] of s.pts) g.lineTo(x, y);
+  g.stroke();
+  for (const [x, y] of s.pts) { g.beginPath(); g.arc(x, y, 2.2, 0, 7); g.fill(); }
+  g.fillRect(s.pts[0][0] - 5, s.pts[0][1] - 5, 10, 10);
+}
+function redraw() { g.clearRect(0, 0, innerWidth, innerHeight); strokes.forEach(drawStroke); }
+addEventListener('resize', size); size();
+const show = () => { log.textContent = lines.slice(-12).join('\n'); };
+function begin(x, y, kind) {
+  cur = { n: ++n, kind, color: `hsl(${(n * 47) % 360} 90% 60%)`, pts: [[x, y]], path: 0, t0: performance.now() };
+  strokes.push(cur); drawStroke(cur);
+}
+function move(x, y) {
+  if (!cur) return;
+  const [px, py] = cur.pts[cur.pts.length - 1];
+  cur.path += Math.hypot(x - px, y - py); cur.pts.push([x, y]);
+  g.strokeStyle = g.fillStyle = cur.color; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke();
+  g.beginPath(); g.arc(x, y, 2.2, 0, 7); g.fill();
+}
+function end(cancel) {
+  if (!cur) return;
+  const p = cur.pts, [x0, y0] = p[0], [x1, y1] = p[p.length - 1];
+  const nx = x1 - x0, ny = y1 - y0, nl = Math.hypot(nx, ny) || 1;
+  let back = 0;  // moves that go against the overall direction: the jitter
+  for (let i = 1; i < p.length; i++) {
+    const dot = ((p[i][0] - p[i - 1][0]) * nx + (p[i][1] - p[i - 1][1]) * ny) / nl;
+    if (dot < -0.5) back++;
+  }
+  const ms = Math.round(performance.now() - cur.t0);
+  lines.push(`#${cur.n} ${cur.kind} ${ms}ms moves ${p.length - 1} path ${Math.round(cur.path)} net ${Math.round(nx)},${Math.round(ny)} back ${back}${cancel ? ' CANCEL' : ''}`);
+  cur = null; show();
+}
+addEventListener('touchstart', e => {
+  if (e.target.id === 'clear') { strokes = []; lines = []; redraw(); show(); e.preventDefault(); return; }
+  const t = e.changedTouches[0]; begin(t.clientX, t.clientY, 'touch'); e.preventDefault();
+}, { passive: false });
+addEventListener('touchmove', e => { const t = e.changedTouches[0]; move(t.clientX, t.clientY); e.preventDefault(); }, { passive: false });
+addEventListener('touchend', () => end(false));
+addEventListener('touchcancel', () => end(true));
+addEventListener('mousedown', e => { if (!cur && e.target.id !== 'clear') begin(e.clientX, e.clientY, 'mouse'); });
+addEventListener('mousemove', e => { if (cur && cur.kind === 'mouse') move(e.clientX, e.clientY); });
+addEventListener('mouseup', () => { if (cur && cur.kind === 'mouse') end(false); });
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+mcp==2.3.0
+numpy
+pillow
+rapidocr==3.10.0
+onnxruntime==1.31.1

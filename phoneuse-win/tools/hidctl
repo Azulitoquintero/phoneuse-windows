@@ -1,0 +1,13 @@
+#!/usr/bin/python
+"""Send one command to hidd: hidctl move 40 0 | hidctl type hello | hidctl status"""
+import socket
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(__doc__)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect("/run/phoneuse-hid.sock")
+s.sendall((" ".join(sys.argv[1:]) + "\n").encode())
+reply = s.makefile().readline().strip()
+print(reply)
+sys.exit(0 if reply.startswith("ok") else 1)
